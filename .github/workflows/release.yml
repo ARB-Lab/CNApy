@@ -1,0 +1,85 @@
+name: Github Release
+
+# on:
+#   release:
+#     types: 
+#       - created
+#     branches: [ master ]
+
+on:
+  push:
+    # Sequence of patterns matched against refs/tags
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+    branches: [ st/gh-action ]
+
+jobs:
+  build:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest]
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: setup miniconda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
+        auto-update-conda: true
+        python-version: '3.7'
+        # activate-environment: build-deploy
+        channels: conda-forge, bioconda
+
+    - name: install prerequisites
+      shell: pwsh
+      run: conda install conda-build conda-verify anaconda-client constructor
+
+    - name: Windows build
+      if: matrix.os == 'windows-latest'
+      env:
+        ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_LOGIN }}
+      shell: pwsh
+      run: |
+        conda-build ./recipes/win -c conda-forge -c bioconda --output-folder build
+
+    - name: Linux build
+      if: matrix.os == 'ubuntu-latest'
+      shell: pwsh
+      run: conda-build ./recipes/linux -c conda-forge -c bioconda --output-folder build
+
+    - name: Upload to Anaconda (Windows)
+      if: matrix.os == 'windows-latest'
+      env:
+        ANACONDA_LOGIN: ${{ secrets.ANACONDA_LOGIN }}
+      shell: bash -l {0}
+      run: anaconda -v -t $ANACONDA_LOGIN upload -l test  build\win-64\*.tar.bz2
+
+    - name: Upload to Anaconda (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      env:
+        ANACONDA_LOGIN: ${{ secrets.ANACONDA_LOGIN }}
+      shell: bash -l {0}
+      run: anaconda -v -t $ANACONDA_LOGIN upload -l test build/linux-64/*.tar.bz2
+
+    - name: Installscript
+      shell: pwsh
+      run: constructor ./construct
+  
+    # - name: GH Release linux
+    #   if: matrix.os == 'ubuntu-latest'
+    #   uses: softprops/action-gh-release@v0.1.5
+    #   with:
+    #     # Newline-delimited list of path globs for asset files to upload
+    #     files: CNApy-0.0.3-Linux-x86_64.sh
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  
+    # - name: GH Release Windows
+    #   if: matrix.os == 'windows-latest'
+    #   uses: softprops/action-gh-release@v0.1.5
+    #   with:
+    #     files: CNApy-${{ github.event.release.tag_name }}-Windows-x86_64.exe
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   
