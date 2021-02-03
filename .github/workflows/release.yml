@@ -65,7 +65,7 @@ jobs:
 
     - name: Installscript
       shell: pwsh
-      run: constructor ./construct
+      run: constructor ./constructor
   
     # - name: GH Release linux
     #   if: matrix.os == 'ubuntu-latest'
