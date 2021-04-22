@@ -6,12 +6,13 @@ from tempfile import TemporaryDirectory
 from typing import Tuple
 from zipfile import ZipFile
 from cnapy.flux_vector_container import FluxVectorContainer
+from cnapy.utils import Worker
 
 import cobra
 import numpy as np
 
 from cobra.manipulation.delete import prune_unused_metabolites
-from qtpy.QtCore import QFileInfo, Qt, Slot
+from qtpy.QtCore import QFileInfo, Qt, Slot, QRunnable, QObject, Signal
 from qtpy.QtGui import QColor, QIcon, QPalette
 from qtpy.QtSvg import QGraphicsSvgItem
 from qtpy.QtWidgets import (QAction, QApplication, QFileDialog, QGraphicsItem,
@@ -33,6 +34,7 @@ from cnapy.gui_elements.rename_map_dialog import RenameMapDialog
 from cnapy.gui_elements.yield_optimization_dialog import \
     YieldOptimizationDialog
 from cnapy.legacy import try_cna
+from cnapy.core import load_values_into_model, fva_computation
 
 
 class MainWindow(QMainWindow):
@@ -888,7 +890,7 @@ class MainWindow(QMainWindow):
 
     def fba(self):
         with self.appdata.project.cobra_py_model as model:
-            self.appdata.project.load_scenario_into_model(model)
+            load_values_into_model(self.appdata.project.scen_values,  model)
             solution = model.optimize()
             if solution.status == 'optimal':
                 soldict = solution.fluxes.to_dict()
@@ -907,7 +909,8 @@ class MainWindow(QMainWindow):
 
     def fba_optimize_reaction(self, reaction: str, mmin: bool):
         with self.appdata.project.cobra_py_model as model:
-            self.appdata.project.load_scenario_into_model(model)
+            load_values_into_model(self.appdata.project.scen_values,  model)
+
             for r in self.appdata.project.cobra_py_model.reactions:
                 if r.id == reaction:
                     if mmin:
@@ -934,7 +937,7 @@ class MainWindow(QMainWindow):
 
     def pfba(self):
         with self.appdata.project.cobra_py_model as model:
-            self.appdata.project.load_scenario_into_model(model)
+            load_values_into_model(self.appdata.project.scen_values,  model)
             try:
                 solution = cobra.flux_analysis.pfba(model)
             except cobra.exceptions.Infeasible:
@@ -975,7 +978,7 @@ class MainWindow(QMainWindow):
 
     def net_conversion(self):
         with self.appdata.project.cobra_py_model as model:
-            self.appdata.project.load_scenario_into_model(model)
+            load_values_into_model(self.appdata.project.scen_values,  model)
             solution = model.optimize()
             if solution.status == 'optimal':
                 errors = False
@@ -1091,7 +1094,7 @@ class MainWindow(QMainWindow):
 
     def print_in_out_fluxes(self, metabolite):
         with self.appdata.project.cobra_py_model as model:
-            self.appdata.project.load_scenario_into_model(model)
+            load_values_into_model(self.appdata.project.scen_values,  model)
             solution = model.optimize()
             if solution.status == 'optimal':
                 soldict = solution.fluxes.to_dict()
@@ -1107,36 +1110,10 @@ class MainWindow(QMainWindow):
                 reaction.lower_bound, reaction.upper_bound)
         self.centralWidget().update()
 
-    def fva(self, fraction_of_optimum=0.0):  # cobrapy default is 1.0
-        from cobra.flux_analysis import flux_variability_analysis
-        with self.appdata.project.cobra_py_model as model:
-            self.appdata.project.load_scenario_into_model(model)
-            for r in self.appdata.project.cobra_py_model.reactions:
-                r.objective_coefficient = 0
-            try:
-                solution = flux_variability_analysis(
-                    model, fraction_of_optimum=fraction_of_optimum)
-            except cobra.exceptions.Infeasible:
-                QMessageBox.information(
-                    self, 'No solution', 'The scenario is infeasible')
-            except Exception:
-                output = io.StringIO()
-                traceback.print_exc(file=output)
-                exstr = output.getvalue()
-                print(exstr)
-                QMessageBox.warning(self, 'Unknown exception occured!',
-                                    exstr+'\nPlease report the problem to:\n\
-                                    \nhttps://github.com/cnapy-org/CNApy/issues')
-            else:
-                minimum = solution.minimum.to_dict()
-                maximum = solution.maximum.to_dict()
-                for i in minimum:
-                    self.appdata.project.comp_values[i] = (
-                        minimum[i], maximum[i])
-
-                self.appdata.project.compute_color_type = 3
-
-        self.centralWidget().update()
+    def fva(self):
+        worker = Worker(self.run_fva)
+        worker.signals.result.connect(self.set_fva_solution)
+        self.appdata.threadpool.start(worker)
 
     def efm(self):
         self.efm_dialog = EFMDialog(
@@ -1296,6 +1273,20 @@ class MainWindow(QMainWindow):
             ax.set_title('In/Out fluxes at metabolite ' + metabolite_id)
             ax.legend(bbox_to_anchor=(1, 1), loc="upper left")
             plt.show()
+
+    def run_fva(self):
+        with self.appdata.project.cobra_py_model as model:
+            solution = fva_computation(model, self.appdata.project.scen_values)
+            return solution
+
+    def set_fva_solution(self, solution):
+
+        minimum = solution.minimum.to_dict()
+        maximum = solution.maximum.to_dict()
+        for i in minimum:
+            self.appdata.project.comp_values[i] = (
+                minimum[i], maximum[i])
+        self.centralWidget().update()
 
 
 def my_mean(value):
